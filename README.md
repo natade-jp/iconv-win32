@@ -1,8 +1,8 @@
-# iconv-win32
+# iconv-win
 
-Prebuilt **libiconv for Windows (x86 / Win32)**.
+Prebuilt **libiconv for Windows (x86 / x64)**.
 
-This repository provides the DLL, import library, and header file required to use libiconv in Visual Studio C/C++ projects without building it yourself.
+This repository provides ready-to-use DLLs, import libraries, and headers for Visual Studio C/C++ projects — no manual build required.
 
 ---
 
@@ -11,14 +11,20 @@ This repository provides the DLL, import library, and header file required to us
 ```
 
 dist/
-├ bin/
-│   └ iconv-2.dll
-├ include/
-│   └ iconv.h
-├ lib/
-│   └ iconv.lib
-└ LICENSES/
-└ libiconv-LICENSE.txt
+├─ x86/
+│  ├─ bin/
+│  │  └─ iconv-2.dll
+│  └─ lib/
+│     └─ iconv.lib
+├─ x64/
+│  ├─ bin/
+│  │  └─ iconv-2.dll
+│  └─ lib/
+│     └─ iconv.lib
+├─ include/
+│  └─ iconv.h
+└─ LICENSES/
+└─ libiconv-LICENSE.txt
 
 ```
 
@@ -26,9 +32,9 @@ dist/
 
 ## 🚀 How to Use (Visual Studio)
 
-### 1. Include path
+Choose the architecture that matches your project.
 
-Add:
+### 1. Include path
 
 ```
 
@@ -36,44 +42,38 @@ dist/include
 
 ```
 
-to:
-
-```
-
-Project
-→ Properties
-→ C/C++
+Project  
+→ Properties  
+→ C/C++  
 → Additional Include Directories
-
-```
 
 ---
 
 ### 2. Library path
 
-Add:
+#### Win32 (x86)
 
 ```
 
-dist/lib
+dist/x86/lib
 
 ```
 
-to:
+#### x64
 
 ```
 
-Linker
-→ General
+dist/x64/lib
+
+```
+
+Linker  
+→ General  
 → Additional Library Directories
-
-```
 
 ---
 
 ### 3. Link library
-
-Add:
 
 ```
 
@@ -81,30 +81,33 @@ iconv.lib
 
 ```
 
-to:
-
-```
-
-Linker
-→ Input
+Linker  
+→ Input  
 → Additional Dependencies
-
-```
 
 ---
 
 ### 4. Runtime
 
-Place:
+Place the appropriate DLL next to your executable:
+
+#### Win32 (x86)
 
 ```
 
-dist/bin/iconv-2.dll
+dist/x86/bin/iconv-2.dll
+
+```
+
+#### x64
+
+```
+
+dist/x64/bin/iconv-2.dll
 
 ````
 
-next to your executable  
-(or in a directory included in `PATH`).
+(or add the directory to your `PATH`)
 
 ---
 
@@ -118,20 +121,18 @@ next to your executable
 
 ## 🏗 Build It Yourself
 
-If you want to build libiconv manually:
-
 ```
-build_libiconv_x86.bat
+build_libiconv.bat
 make_package.bat
 ```
 
 This will:
 
 1. Download vcpkg
-2. Build libiconv (x86 / DLL)
+2. Build libiconv (x86 / x64 DLL)
 3. Create the distribution layout
 
-Note: vcpkg itself is **not included** in this repository.
+Note: **vcpkg itself is not included in this repository.**
 
 ---
 
@@ -150,7 +151,9 @@ libiconv is licensed under the **GNU Lesser General Public License (LGPL)**.
 The license text is included in:
 
 ```
+
 dist/LICENSES/libiconv-LICENSE.txt
+
 ```
 
 Source:
@@ -160,9 +163,9 @@ Source:
 
 ## 📌 Notes
 
-* This package is built for **Win32 (x86)**.
-* For x64 builds, libiconv must be rebuilt.
-* This repository contains **prebuilt binaries only**, not the libiconv source code.
+* Both **Win32 (x86)** and **x64** binaries are provided
+* This repository contains **prebuilt binaries only**, not the libiconv source code
+* The binaries are built using **vcpkg**
 
 ---
 
