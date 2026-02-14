@@ -1,4 +1,11 @@
-vcpkg/
-buildtrees/
-downloads/
-packages/
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.vcxproj.user
+
+# Build results
+Debug/
+Release/
+x64/
+Win32/
