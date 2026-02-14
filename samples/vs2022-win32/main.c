@@ -1,4 +1,4 @@
-#define _CRT_SECURE_NO_WARNINGS
+ï»¿#define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
@@ -12,10 +12,10 @@ static void dump_hex(const unsigned char* p, size_t n)
 
 int main(void)
 {
-    /* ‚±‚Ìƒ\[ƒX‚ª Shift_JIS(CP932) •Û‘¶‚È‚çA‚±‚±‚à CP932 ‚ÌƒoƒCƒg—ñ‚É‚È‚é */
-    const char input_cp932[] = "‚±‚ñ‚É‚¿‚Í";
+    /* ã“ã®ã‚½ãƒ¼ã‚¹ãŒ Shift_JIS(CP932) ä¿å­˜ãªã‚‰ã€ã“ã“ã‚‚ CP932 ã®ãƒã‚¤ãƒˆåˆ—ã«ãªã‚‹ */
+    const char input_cp932[] = "ã“ã‚“ã«ã¡ã¯";
 
-    /* •ÏŠ·æ: UTF-8, •ÏŠ·Œ³: CP932(Shift_JISŒİŠ·) */
+    /* å¤‰æ›å…ˆ: UTF-8, å¤‰æ›å…ƒ: CP932(Shift_JISäº’æ›) */
     iconv_t cd = iconv_open("UTF-8", "CP932");
     if (cd == (iconv_t)-1) {
         perror("iconv_open");
@@ -44,7 +44,7 @@ int main(void)
     printf("UTF-8 bytes: ");
     dump_hex((const unsigned char*)output_utf8, strlen(output_utf8));
 
-    /* UTF-8 ‚ğ Windows ƒRƒ“ƒ\[ƒ‹‚Å³‚µ‚­•\¦‚³‚¹‚½‚¢ê‡ */
+    /* UTF-8 ã‚’ Windows ã‚³ãƒ³ã‚½ãƒ¼ãƒ«ã§æ­£ã—ãè¡¨ç¤ºã•ã›ãŸã„å ´åˆ */
     SetConsoleOutputCP(CP_UTF8);
     printf("UTF-8 text: %s\n", output_utf8);
 
