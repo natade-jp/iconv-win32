@@ -1,22 +1,38 @@
-#define _CRT_SECURE_NO_WARNINGS
+﻿#define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <iconv.h>
-#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 /*
-TSV columns:
-code        bytes_hex
-win_ok  win_cp   win_char   win_rt_ok  win_rt_hex
-ic_ok   ic_cp    ic_char    ic_rt_ok   ic_rt_hex
-diff_flags
+出力TSV列（日本語）:
+入力コード
+入力バイト列(16進)
+
+Windows_CP932:デコード成功
+Windows_CP932:Unicodeコードポイント
+Windows_CP932:文字
+Windows_CP932:元に戻る
+Windows_CP932:再エンコード結果(16進)
+
+iconv:デコード成功
+iconv:Unicodeコードポイント
+iconv:文字
+iconv:元に戻る
+iconv:再エンコード結果(16進)
+
+iconv→Windows_CP932:エンコード可能
+iconv→Windows_CP932:元に戻る
+iconv→Windows_CP932:再エンコード結果(16進)
+
+差分フラグ(ビット値)
+差分内容
 
 diff_flags (bitset):
- 1  decode_ok differs (win_ok != ic_ok)
- 2  both ok but codepoint differs
- 4  roundtrip differs (win_rt_ok vs ic_rt_ok)
+ 1  デコード可否差 (win_ok != ic_ok)
+ 2  Unicode差 (win_ok && ic_ok && win_cp != ic_cp)
+ 4  元に戻る差 (win_back != ic_back)
 */
 
 static int is_valid_sjis_2byte(uint8_t lead, uint8_t trail) {
@@ -60,7 +76,7 @@ static int win_decode_cp932(const uint8_t* bytes, int len, uint32_t* cp_out, int
     return 1;
 }
 
-/* Windows: codepoint -> bytes(CP932), strict */
+/* Windows: codepoint -> bytes(CP932), strict (no best-fit) */
 static int win_encode_cp932(uint32_t cp, uint8_t* out, int out_cap, int* out_len) {
     WCHAR wbuf[2] = { 0 };
     int wlen = 0;
@@ -82,7 +98,7 @@ static int win_encode_cp932(uint32_t cp, uint8_t* out, int out_cap, int* out_len
         NULL, &usedDefault);
 
     if (mblen <= 0) return 0;
-    if (usedDefault) return 0; // strict: treat best-fit/default as failure
+    if (usedDefault) return 0;
     if (mblen > out_cap) return 0;
 
     memcpy(out, mb, mblen);
@@ -90,9 +106,9 @@ static int win_encode_cp932(uint32_t cp, uint8_t* out, int out_cap, int* out_len
     return 1;
 }
 
-/* iconv: bytes(SHIFT_JIS) -> codepoint via UTF-32LE */
-static int iconv_decode_sjis(const uint8_t* bytes, size_t len, uint32_t* cp_out) {
-    iconv_t cd = iconv_open("UTF-32LE", "SHIFT_JIS");
+/* iconv: bytes(ENC) -> codepoint via UTF-32LE */
+static int iconv_decode_any(const char* enc, const uint8_t* bytes, size_t len, uint32_t* cp_out) {
+    iconv_t cd = iconv_open("UTF-32LE", enc);
     if (cd == (iconv_t)-1) return 0;
 
     uint8_t out[16] = { 0 };
@@ -106,7 +122,6 @@ static int iconv_decode_sjis(const uint8_t* bytes, size_t len, uint32_t* cp_out)
     iconv_close(cd);
 
     if (r == (size_t)-1) return 0;
-
     size_t out_len = sizeof(out) - outleft;
     if (out_len < 4) return 0;
 
@@ -119,9 +134,9 @@ static int iconv_decode_sjis(const uint8_t* bytes, size_t len, uint32_t* cp_out)
     return 1;
 }
 
-/* iconv: codepoint -> bytes(SHIFT_JIS) via UTF-32LE */
-static int iconv_encode_sjis(uint32_t cp, uint8_t* out, size_t out_cap, size_t* out_len) {
-    iconv_t cd = iconv_open("SHIFT_JIS", "UTF-32LE");
+/* iconv: codepoint -> bytes(ENC) via UTF-32LE */
+static int iconv_encode_any(const char* enc, uint32_t cp, uint8_t* out, size_t out_cap, size_t* out_len) {
+    iconv_t cd = iconv_open(enc, "UTF-32LE");
     if (cd == (iconv_t)-1) return 0;
 
     uint8_t in32[4];
@@ -150,10 +165,10 @@ static int codepoint_to_utf8(uint32_t cp, char* out, size_t out_cap) {
     if (out_cap == 0) return 0;
     out[0] = '\0';
 
-    // NUL��TSV�ɓ����Ɖ���̂ŋ�ɂ���
+    // NULはTSVを壊すので空にする
     if (cp == 0) return 1;
 
-    // Surrogate code points are invalid as scalar values
+    // Surrogates are invalid scalar values
     if (0xD800 <= cp && cp <= 0xDFFF) return 0;
     if (cp > 0x10FFFF) return 0;
 
@@ -191,26 +206,60 @@ static void escape_tsv_inplace(char* s) {
     *w = '\0';
 }
 
-int main(void) {
-    FILE* fp = fopen("diff_sjis_cp932.tsv", "wb");
-    if (!fp) { perror("fopen"); return 1; }
-
-    // UTF-8 BOM (Excel�΍�B�s�v�Ȃ�����OK)
+static void write_bom_utf8(FILE* fp) {
     fputc(0xEF, fp); fputc(0xBB, fp); fputc(0xBF, fp);
+}
+
+static void diff_to_text(int diff, char* out, size_t cap) {
+    out[0] = '\0';
+    int first = 1;
+
+    if (diff & 1) {
+        strncat(out, first ? "デコード可否差" : "|デコード可否差", cap - strlen(out) - 1);
+        first = 0;
+    }
+    if (diff & 2) {
+        strncat(out, first ? "Unicode差" : "|Unicode差", cap - strlen(out) - 1);
+        first = 0;
+    }
+    if (diff & 4) {
+        strncat(out, first ? "元に戻る差" : "|元に戻る差", cap - strlen(out) - 1);
+        first = 0;
+    }
+    if (first) {
+        strncat(out, "差分なし", cap - strlen(out) - 1);
+    }
+}
+
+static void run_case(const char* iconv_enc, const char* out_path) {
+    FILE* fp = fopen(out_path, "wb");
+    if (!fp) { perror("fopen"); return; }
+
+    write_bom_utf8(fp);
+    fprintf(fp, "# Windows: CP932, iconv: %s\n", iconv_enc);
 
     fprintf(fp,
-        "code\tbytes_hex\t"
-        "win_ok\twin_cp\twin_char\twin_rt_ok\twin_rt_hex\t"
-        "ic_ok\tic_cp\tic_char\tic_rt_ok\tic_rt_hex\t"
-        "diff_flags\n"
+        "入力コード\t入力バイト列(16進)\t"
+        "Windows_CP932:デコード成功\tWindows_CP932:Unicodeコードポイント\tWindows_CP932:文字\tWindows_CP932:元に戻る\tWindows_CP932:再エンコード結果(16進)\t"
+        "iconv:デコード成功\ticonv:Unicodeコードポイント\ticonv:文字\ticonv:元に戻る\ticonv:再エンコード結果(16進)\t"
+        "iconv→Windows_CP932:エンコード可能\ticonv→Windows_CP932:元に戻る\ticonv→Windows_CP932:再エンコード結果(16進)\t"
+        "差分フラグ(ビット値)\t差分内容\n"
     );
+
+    // iconv encoding availability check
+    int iconv_enc_available = 1;
+    {
+        iconv_t cd = iconv_open("UTF-32LE", iconv_enc);
+        if (cd == (iconv_t)-1) iconv_enc_available = 0;
+        else iconv_close(cd);
+    }
 
     for (uint32_t code = 1; code <= 0xFFFF; code++) {
         uint8_t bytes[2];
         int blen = 0;
 
         if (code < 0x100) {
-            if (code <= 0x20) continue; // like HSP
+            if (code <= 0x20) continue;
             bytes[0] = (uint8_t)code;
             blen = 1;
         }
@@ -226,7 +275,7 @@ int main(void) {
         char bytes_hex[32] = { 0 };
         bytes_to_hex(bytes, (size_t)blen, bytes_hex, sizeof(bytes_hex));
 
-        // Windows decode/encode
+        // Windows decode/encode (CP932)
         int win_ok = 0, win_sur = 0;
         uint32_t win_cp = 0;
         uint8_t win_rt[8] = { 0 };
@@ -237,23 +286,42 @@ int main(void) {
         if (win_ok) {
             win_rt_ok = win_encode_cp932(win_cp, win_rt, (int)sizeof(win_rt), &win_rt_len);
         }
+        int win_back = (win_rt_ok && win_rt_len == blen && memcmp(win_rt, bytes, blen) == 0);
 
-        // iconv decode/encode
+        char win_rt_hex[32] = { 0 };
+        if (win_rt_ok) bytes_to_hex(win_rt, (size_t)win_rt_len, win_rt_hex, sizeof(win_rt_hex));
+
+        // iconv decode/encode (iconv_enc)
         int ic_ok = 0;
         uint32_t ic_cp = 0;
         uint8_t ic_rt[8] = { 0 };
         size_t ic_rt_len = 0;
         int ic_rt_ok = 0;
 
-        ic_ok = iconv_decode_sjis(bytes, (size_t)blen, &ic_cp);
-        if (ic_ok) {
-            ic_rt_ok = iconv_encode_sjis(ic_cp, ic_rt, sizeof(ic_rt), &ic_rt_len);
+        if (iconv_enc_available) {
+            ic_ok = iconv_decode_any(iconv_enc, bytes, (size_t)blen, &ic_cp);
+            if (ic_ok) {
+                ic_rt_ok = iconv_encode_any(iconv_enc, ic_cp, ic_rt, sizeof(ic_rt), &ic_rt_len);
+            }
         }
 
-        char win_rt_hex[32] = { 0 };
+        int ic_back = (ic_rt_ok && ic_rt_len == (size_t)blen && memcmp(ic_rt, bytes, blen) == 0);
+
         char ic_rt_hex[32] = { 0 };
-        if (win_rt_ok) bytes_to_hex(win_rt, (size_t)win_rt_len, win_rt_hex, sizeof(win_rt_hex));
-        if (ic_rt_ok)  bytes_to_hex(ic_rt, ic_rt_len, ic_rt_hex, sizeof(ic_rt_hex));
+        if (ic_rt_ok) bytes_to_hex(ic_rt, ic_rt_len, ic_rt_hex, sizeof(ic_rt_hex));
+
+        // iconv Unicode -> Windows CP932 encode
+        int ic_win_ok = 0;
+        uint8_t ic_win_rt[8] = { 0 };
+        int ic_win_rt_len = 0;
+
+        if (ic_ok) {
+            ic_win_ok = win_encode_cp932(ic_cp, ic_win_rt, (int)sizeof(ic_win_rt), &ic_win_rt_len);
+        }
+        int ic_win_back = (ic_win_ok && ic_win_rt_len == blen && memcmp(ic_win_rt, bytes, blen) == 0);
+
+        char ic_win_rt_hex[32] = { 0 };
+        if (ic_win_ok) bytes_to_hex(ic_win_rt, (size_t)ic_win_rt_len, ic_win_rt_hex, sizeof(ic_win_rt_hex));
 
         // Unicode character columns (UTF-8)
         char win_char[32] = { 0 };
@@ -271,25 +339,36 @@ int main(void) {
         int diff = 0;
         if (win_ok != ic_ok) diff |= 1;
         if (win_ok && ic_ok && win_cp != ic_cp) diff |= 2;
-
-        int win_back = (win_rt_ok && win_rt_len == blen && memcmp(win_rt, bytes, blen) == 0);
-        int ic_back = (ic_rt_ok && ic_rt_len == (size_t)blen && memcmp(ic_rt, bytes, blen) == 0);
         if (win_back != ic_back) diff |= 4;
+
+        char diff_text[64];
+        diff_to_text(diff, diff_text, sizeof(diff_text));
 
         fprintf(fp,
             "0x%04X\t%s\t"
             "%d\t0x%08X\t%s\t%d\t%s\t"
             "%d\t0x%08X\t%s\t%d\t%s\t"
-            "%d\n",
-            (unsigned)code,
-            bytes_hex,
+            "%d\t%d\t%s\t"
+            "%d\t%s\n",
+            (unsigned)code, bytes_hex,
             win_ok, (unsigned)win_cp, win_ok ? win_char : "", win_back, win_rt_ok ? win_rt_hex : "",
             ic_ok, (unsigned)ic_cp, ic_ok ? ic_char : "", ic_back, ic_rt_ok ? ic_rt_hex : "",
-            diff
+            ic_win_ok, ic_win_back, ic_win_ok ? ic_win_rt_hex : "",
+            diff, diff_text
         );
     }
 
     fclose(fp);
-    printf("Saved: diff_sjis_cp932.tsv\n");
+
+    if (!iconv_enc_available) {
+        printf("[WARN] iconv encoding not available: %s (file generated but iconv側は常に失敗になります)\n", iconv_enc);
+    }
+    printf("Saved: %s\n", out_path);
+}
+
+int main(void) {
+    run_case("SHIFT_JIS", "diff_win_cp932_vs_iconv_shift_jis.tsv");
+    run_case("CP932", "diff_win_cp932_vs_iconv_cp932.tsv");
+    run_case("SHIFT_JISX0213", "diff_win_cp932_vs_iconv_shift_jisx0213.tsv");
     return 0;
 }
