@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "nkf32.h"
 
 /*
 出力TSV列（日本語）:
@@ -16,23 +17,23 @@ Windows_CP932:文字
 Windows_CP932:元に戻る
 Windows_CP932:再エンコード結果(16進)
 
-iconv:デコード成功
-iconv:Unicodeコードポイント
-iconv:文字
-iconv:元に戻る
-iconv:再エンコード結果(16進)
+ライブラリ利用:デコード成功
+ライブラリ利用:Unicodeコードポイント
+ライブラリ利用:文字
+ライブラリ利用:元に戻る
+ライブラリ利用:再エンコード結果(16進)
 
-iconv→Windows_CP932:エンコード可能
-iconv→Windows_CP932:元に戻る
-iconv→Windows_CP932:再エンコード結果(16進)
+ライブラリ利用→Windows_CP932:エンコード可能
+ライブラリ利用→Windows_CP932:元に戻る
+ライブラリ利用→Windows_CP932:再エンコード結果(16進)
 
 差分フラグ(ビット値)
 差分内容
 
-diff_flags (bitset):
- 1  デコード可否差 (win_ok != ic_ok)
- 2  Unicode差 (win_ok && ic_ok && win_cp != ic_cp)
- 4  元に戻る差 (win_back != ic_back)
+diff_flags (bitset):  ※Windows vs ライブラリ利用
+ 1  デコード可否差 (win_ok != lib_ok)
+ 2  Unicode差 (win_ok && lib_ok && win_cp != lib_cp)
+ 4  元に戻る差 (win_back != lib_back)
 */
 
 static int is_valid_sjis_2byte(uint8_t lead, uint8_t trail) {
@@ -106,6 +107,89 @@ static int win_encode_cp932(uint32_t cp, uint8_t* out, int out_cap, int* out_len
     return 1;
 }
 
+/* codepoint -> UTF-8 string (for TSV) */
+static int codepoint_to_utf8(uint32_t cp, char* out, size_t out_cap) {
+    if (out_cap == 0) return 0;
+    out[0] = '\0';
+
+    // NULはTSVを壊すので空にする
+    if (cp == 0) return 1;
+
+    // Surrogates are invalid scalar values
+    if (0xD800 <= cp && cp <= 0xDFFF) return 0;
+    if (cp > 0x10FFFF) return 0;
+
+    WCHAR wbuf[2];
+    int wlen = 0;
+
+    if (cp <= 0xFFFF) {
+        wbuf[0] = (WCHAR)cp;
+        wlen = 1;
+    }
+    else {
+        uint32_t v = cp - 0x10000;
+        wbuf[0] = (WCHAR)(0xD800 + (v >> 10));
+        wbuf[1] = (WCHAR)(0xDC00 + (v & 0x3FF));
+        wlen = 2;
+    }
+
+    int n = WideCharToMultiByte(CP_UTF8, 0, wbuf, wlen, out, (int)out_cap - 1, NULL, NULL);
+    if (n <= 0) return 0;
+    out[n] = '\0';
+    return 1;
+}
+
+/* UTF-8 bytes -> codepoint, strict */
+static int win_decode_utf8(const uint8_t* bytes, int len, uint32_t* cp_out) {
+    WCHAR wbuf[4] = { 0 };
+    int wlen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (LPCCH)bytes, len, wbuf, 4);
+    if (wlen <= 0) return 0;
+    int dummy = 0;
+    *cp_out = utf16_to_codepoint(wbuf, wlen, &dummy);
+    return 1;
+}
+
+/* Minimal TSV escape: tab/newline/carriage return */
+static void escape_tsv_inplace(char* s) {
+    char* r = s;
+    char* w = s;
+    while (*r) {
+        unsigned char c = (unsigned char)*r++;
+        if (c == '\t') { *w++ = '\\'; *w++ = 't'; }
+        else if (c == '\n') { *w++ = '\\'; *w++ = 'n'; }
+        else if (c == '\r') { *w++ = '\\'; *w++ = 'r'; }
+        else { *w++ = (char)c; }
+    }
+    *w = '\0';
+}
+
+static void write_bom_utf8(FILE* fp) {
+    fputc(0xEF, fp); fputc(0xBB, fp); fputc(0xBF, fp);
+}
+
+static void diff_to_text(int diff, char* out, size_t cap) {
+    out[0] = '\0';
+    int first = 1;
+
+    if (diff & 1) {
+        strncat(out, first ? "デコード可否差" : "|デコード可否差", cap - strlen(out) - 1);
+        first = 0;
+    }
+    if (diff & 2) {
+        strncat(out, first ? "Unicode差" : "|Unicode差", cap - strlen(out) - 1);
+        first = 0;
+    }
+    if (diff & 4) {
+        strncat(out, first ? "元に戻る差" : "|元に戻る差", cap - strlen(out) - 1);
+        first = 0;
+    }
+    if (first) {
+        strncat(out, "差分なし", cap - strlen(out) - 1);
+    }
+}
+
+/* ---------------- iconv (library) ---------------- */
+
 /* iconv: bytes(ENC) -> codepoint via UTF-32LE */
 static int iconv_decode_any(const char* enc, const uint8_t* bytes, size_t len, uint32_t* cp_out) {
     iconv_t cd = iconv_open("UTF-32LE", enc);
@@ -160,97 +244,82 @@ static int iconv_encode_any(const char* enc, uint32_t cp, uint8_t* out, size_t o
     return 1;
 }
 
-/* codepoint -> UTF-8 string (for TSV) */
-static int codepoint_to_utf8(uint32_t cp, char* out, size_t out_cap) {
-    if (out_cap == 0) return 0;
-    out[0] = '\0';
+/* ---------------- nkf (library, CP932 only) ---------------- */
 
-    // NULはTSVを壊すので空にする
-    if (cp == 0) return 1;
-
-    // Surrogates are invalid scalar values
-    if (0xD800 <= cp && cp <= 0xDFFF) return 0;
-    if (cp > 0x10FFFF) return 0;
-
-    WCHAR wbuf[2];
-    int wlen = 0;
-
-    if (cp <= 0xFFFF) {
-        wbuf[0] = (WCHAR)cp;
-        wlen = 1;
-    }
-    else {
-        uint32_t v = cp - 0x10000;
-        wbuf[0] = (WCHAR)(0xD800 + (v >> 10));
-        wbuf[1] = (WCHAR)(0xDC00 + (v & 0x3FF));
-        wlen = 2;
-    }
-
-    int n = WideCharToMultiByte(CP_UTF8, 0, wbuf, wlen, out, (int)out_cap - 1, NULL, NULL);
-    if (n <= 0) return 0;
-    out[n] = '\0';
+/* nkf: CP932 bytes -> UTF-8 bytes */
+static int nkf_cp932_to_utf8(const uint8_t* in, int in_len, uint8_t* out, DWORD out_cap, DWORD* out_len) {
+    if (SetNkfOption("-s -w") < 0) return 0; /* 入力CP932(-s) -> 出力UTF-8(-w) */
+    DWORD produced = 0;
+    BOOL ok = NkfConvertSafe((LPSTR)out, out_cap, &produced, (LPCSTR)in, (DWORD)in_len);
+    if (!ok) return 0;
+    if (produced >= out_cap) return 0;
+    *out_len = produced;
     return 1;
 }
 
-/* Minimal TSV escape: tab/newline/carriage return */
-static void escape_tsv_inplace(char* s) {
-    char* r = s;
-    char* w = s;
-    while (*r) {
-        unsigned char c = (unsigned char)*r++;
-        if (c == '\t') { *w++ = '\\'; *w++ = 't'; }
-        else if (c == '\n') { *w++ = '\\'; *w++ = 'n'; }
-        else if (c == '\r') { *w++ = '\\'; *w++ = 'r'; }
-        else { *w++ = (char)c; }
-    }
-    *w = '\0';
+/* nkf: UTF-8 bytes -> CP932 bytes */
+static int nkf_utf8_to_cp932(const uint8_t* in, int in_len, uint8_t* out, DWORD out_cap, DWORD* out_len) {
+    if (SetNkfOption("-w -s") < 0) return 0; /* 入力UTF-8(-w) -> 出力CP932相当(-s) */
+    DWORD produced = 0;
+    BOOL ok = NkfConvertSafe((LPSTR)out, out_cap, &produced, (LPCSTR)in, (DWORD)in_len);
+    if (!ok) return 0;
+    if (produced >= out_cap) return 0;
+    *out_len = produced;
+    return 1;
 }
 
-static void write_bom_utf8(FILE* fp) {
-    fputc(0xEF, fp); fputc(0xBB, fp); fputc(0xBF, fp);
+/* nkf: CP932 bytes -> codepoint (via UTF-8 -> Windows) */
+static int nkf_decode_cp932_to_codepoint(const uint8_t* bytes, int len, uint32_t* cp_out) {
+    uint8_t u8buf[64] = { 0 };
+    DWORD u8len = 0;
+    if (!nkf_cp932_to_utf8(bytes, len, u8buf, (DWORD)sizeof(u8buf), &u8len)) return 0;
+    if (u8len == 0) return 0;
+    return win_decode_utf8(u8buf, (int)u8len, cp_out);
 }
 
-static void diff_to_text(int diff, char* out, size_t cap) {
-    out[0] = '\0';
-    int first = 1;
+/* nkf: codepoint -> CP932 bytes (via UTF-8 string -> nkf) */
+static int nkf_encode_codepoint_to_cp932(uint32_t cp, uint8_t* out, int out_cap, int* out_len) {
+    char u8str[32] = { 0 };
+    if (!codepoint_to_utf8(cp, u8str, sizeof(u8str))) return 0;
 
-    if (diff & 1) {
-        strncat(out, first ? "デコード可否差" : "|デコード可否差", cap - strlen(out) - 1);
-        first = 0;
-    }
-    if (diff & 2) {
-        strncat(out, first ? "Unicode差" : "|Unicode差", cap - strlen(out) - 1);
-        first = 0;
-    }
-    if (diff & 4) {
-        strncat(out, first ? "元に戻る差" : "|元に戻る差", cap - strlen(out) - 1);
-        first = 0;
-    }
-    if (first) {
-        strncat(out, "差分なし", cap - strlen(out) - 1);
-    }
+    uint8_t cpbuf[16] = { 0 };
+    DWORD cplen = 0;
+    int in_len = (int)strlen(u8str);
+
+    if (!nkf_utf8_to_cp932((const uint8_t*)u8str, in_len, cpbuf, (DWORD)sizeof(cpbuf), &cplen)) return 0;
+    if ((int)cplen > out_cap) return 0;
+
+    memcpy(out, cpbuf, (size_t)cplen);
+    *out_len = (int)cplen;
+    return 1;
 }
 
-static void run_case(const char* iconv_enc, const char* out_path) {
+/* ---------------- common output header ---------------- */
+
+static void write_tsv_header(FILE* fp) {
+    fprintf(fp,
+        "入力コード\t入力バイト列(16進)\t"
+        "Windows_CP932:デコード成功\tWindows_CP932:Unicodeコードポイント\tWindows_CP932:文字\tWindows_CP932:元に戻る\tWindows_CP932:再エンコード結果(16進)\t"
+        "ライブラリ利用:デコード成功\tライブラリ利用:Unicodeコードポイント\tライブラリ利用:文字\tライブラリ利用:元に戻る\tライブラリ利用:再エンコード結果(16進)\t"
+        "ライブラリ利用→Windows_CP932:エンコード可能\tライブラリ利用→Windows_CP932:元に戻る\tライブラリ利用→Windows_CP932:再エンコード結果(16進)\t"
+        "差分フラグ(ビット値)\t差分内容\n"
+    );
+}
+
+/* ---------------- case runners ---------------- */
+
+static void run_case_iconv(const char* iconv_enc, const char* out_path) {
     FILE* fp = fopen(out_path, "wb");
     if (!fp) { perror("fopen"); return; }
 
     write_bom_utf8(fp);
-    fprintf(fp, "# Windows: CP932, iconv: %s\n", iconv_enc);
+    fprintf(fp, "# Windows: CP932, Library: iconv (%s)\n", iconv_enc);
+    write_tsv_header(fp);
 
-    fprintf(fp,
-        "入力コード\t入力バイト列(16進)\t"
-        "Windows_CP932:デコード成功\tWindows_CP932:Unicodeコードポイント\tWindows_CP932:文字\tWindows_CP932:元に戻る\tWindows_CP932:再エンコード結果(16進)\t"
-        "iconv:デコード成功\ticonv:Unicodeコードポイント\ticonv:文字\ticonv:元に戻る\ticonv:再エンコード結果(16進)\t"
-        "iconv→Windows_CP932:エンコード可能\ticonv→Windows_CP932:元に戻る\ticonv→Windows_CP932:再エンコード結果(16進)\t"
-        "差分フラグ(ビット値)\t差分内容\n"
-    );
-
-    // iconv encoding availability check
-    int iconv_enc_available = 1;
+    int lib_available = 1;
     {
         iconv_t cd = iconv_open("UTF-32LE", iconv_enc);
-        if (cd == (iconv_t)-1) iconv_enc_available = 0;
+        if (cd == (iconv_t)-1) lib_available = 0;
         else iconv_close(cd);
     }
 
@@ -283,63 +352,57 @@ static void run_case(const char* iconv_enc, const char* out_path) {
         int win_rt_ok = 0;
 
         win_ok = win_decode_cp932(bytes, blen, &win_cp, &win_sur);
-        if (win_ok) {
-            win_rt_ok = win_encode_cp932(win_cp, win_rt, (int)sizeof(win_rt), &win_rt_len);
-        }
+        if (win_ok) win_rt_ok = win_encode_cp932(win_cp, win_rt, (int)sizeof(win_rt), &win_rt_len);
         int win_back = (win_rt_ok && win_rt_len == blen && memcmp(win_rt, bytes, blen) == 0);
 
         char win_rt_hex[32] = { 0 };
         if (win_rt_ok) bytes_to_hex(win_rt, (size_t)win_rt_len, win_rt_hex, sizeof(win_rt_hex));
 
-        // iconv decode/encode (iconv_enc)
-        int ic_ok = 0;
-        uint32_t ic_cp = 0;
-        uint8_t ic_rt[8] = { 0 };
-        size_t ic_rt_len = 0;
-        int ic_rt_ok = 0;
+        // Library (iconv) decode/encode
+        int lib_ok = 0;
+        uint32_t lib_cp = 0;
+        uint8_t lib_rt[8] = { 0 };
+        size_t lib_rt_len = 0;
+        int lib_rt_ok = 0;
 
-        if (iconv_enc_available) {
-            ic_ok = iconv_decode_any(iconv_enc, bytes, (size_t)blen, &ic_cp);
-            if (ic_ok) {
-                ic_rt_ok = iconv_encode_any(iconv_enc, ic_cp, ic_rt, sizeof(ic_rt), &ic_rt_len);
-            }
+        if (lib_available) {
+            lib_ok = iconv_decode_any(iconv_enc, bytes, (size_t)blen, &lib_cp);
+            if (lib_ok) lib_rt_ok = iconv_encode_any(iconv_enc, lib_cp, lib_rt, sizeof(lib_rt), &lib_rt_len);
         }
 
-        int ic_back = (ic_rt_ok && ic_rt_len == (size_t)blen && memcmp(ic_rt, bytes, blen) == 0);
+        int lib_back = (lib_rt_ok && lib_rt_len == (size_t)blen && memcmp(lib_rt, bytes, blen) == 0);
 
-        char ic_rt_hex[32] = { 0 };
-        if (ic_rt_ok) bytes_to_hex(ic_rt, ic_rt_len, ic_rt_hex, sizeof(ic_rt_hex));
+        char lib_rt_hex[32] = { 0 };
+        if (lib_rt_ok) bytes_to_hex(lib_rt, lib_rt_len, lib_rt_hex, sizeof(lib_rt_hex));
 
-        // iconv Unicode -> Windows CP932 encode
-        int ic_win_ok = 0;
-        uint8_t ic_win_rt[8] = { 0 };
-        int ic_win_rt_len = 0;
+        // Library Unicode -> Windows CP932 encode
+        int lib_win_ok = 0;
+        uint8_t lib_win_rt[8] = { 0 };
+        int lib_win_rt_len = 0;
 
-        if (ic_ok) {
-            ic_win_ok = win_encode_cp932(ic_cp, ic_win_rt, (int)sizeof(ic_win_rt), &ic_win_rt_len);
-        }
-        int ic_win_back = (ic_win_ok && ic_win_rt_len == blen && memcmp(ic_win_rt, bytes, blen) == 0);
+        if (lib_ok) lib_win_ok = win_encode_cp932(lib_cp, lib_win_rt, (int)sizeof(lib_win_rt), &lib_win_rt_len);
+        int lib_win_back = (lib_win_ok && lib_win_rt_len == blen && memcmp(lib_win_rt, bytes, blen) == 0);
 
-        char ic_win_rt_hex[32] = { 0 };
-        if (ic_win_ok) bytes_to_hex(ic_win_rt, (size_t)ic_win_rt_len, ic_win_rt_hex, sizeof(ic_win_rt_hex));
+        char lib_win_rt_hex[32] = { 0 };
+        if (lib_win_ok) bytes_to_hex(lib_win_rt, (size_t)lib_win_rt_len, lib_win_rt_hex, sizeof(lib_win_rt_hex));
 
         // Unicode character columns (UTF-8)
         char win_char[32] = { 0 };
-        char ic_char[32] = { 0 };
+        char lib_char[32] = { 0 };
 
         if (win_ok) {
             if (!codepoint_to_utf8(win_cp, win_char, sizeof(win_char))) win_char[0] = '\0';
             escape_tsv_inplace(win_char);
         }
-        if (ic_ok) {
-            if (!codepoint_to_utf8(ic_cp, ic_char, sizeof(ic_char))) ic_char[0] = '\0';
-            escape_tsv_inplace(ic_char);
+        if (lib_ok) {
+            if (!codepoint_to_utf8(lib_cp, lib_char, sizeof(lib_char))) lib_char[0] = '\0';
+            escape_tsv_inplace(lib_char);
         }
 
         int diff = 0;
-        if (win_ok != ic_ok) diff |= 1;
-        if (win_ok && ic_ok && win_cp != ic_cp) diff |= 2;
-        if (win_back != ic_back) diff |= 4;
+        if (win_ok != lib_ok) diff |= 1;
+        if (win_ok && lib_ok && win_cp != lib_cp) diff |= 2;
+        if (win_back != lib_back) diff |= 4;
 
         char diff_text[64];
         diff_to_text(diff, diff_text, sizeof(diff_text));
@@ -351,24 +414,157 @@ static void run_case(const char* iconv_enc, const char* out_path) {
             "%d\t%d\t%s\t"
             "%d\t%s\n",
             (unsigned)code, bytes_hex,
+
             win_ok, (unsigned)win_cp, win_ok ? win_char : "", win_back, win_rt_ok ? win_rt_hex : "",
-            ic_ok, (unsigned)ic_cp, ic_ok ? ic_char : "", ic_back, ic_rt_ok ? ic_rt_hex : "",
-            ic_win_ok, ic_win_back, ic_win_ok ? ic_win_rt_hex : "",
+
+            lib_ok, (unsigned)lib_cp, lib_ok ? lib_char : "", lib_back, lib_rt_ok ? lib_rt_hex : "",
+
+            lib_win_ok, lib_win_back, lib_win_ok ? lib_win_rt_hex : "",
+
             diff, diff_text
         );
     }
 
     fclose(fp);
 
-    if (!iconv_enc_available) {
-        printf("[WARN] iconv encoding not available: %s (file generated but iconv側は常に失敗になります)\n", iconv_enc);
+    if (!lib_available) {
+        printf("[WARN] iconv encoding not available: %s (file generated but library側は常に失敗になります)\n", iconv_enc);
+    }
+    printf("Saved: %s\n", out_path);
+}
+
+static void run_case_nkf_cp932(const char* out_path) {
+    FILE* fp = fopen(out_path, "wb");
+    if (!fp) { perror("fopen"); return; }
+
+    write_bom_utf8(fp);
+    fprintf(fp, "# Windows: CP932, Library: nkf (CP932 only)\n");
+    write_tsv_header(fp);
+
+    int lib_available = 1;
+    {
+        // 軽いプローブ（A を CP932->UTF8 変換できるか）
+        uint8_t out[8] = { 0 };
+        DWORD outLen = 0;
+        const uint8_t in[1] = { 0x41 }; // 'A'
+        if (!nkf_cp932_to_utf8(in, 1, out, (DWORD)sizeof(out), &outLen)) lib_available = 0;
+    }
+
+    for (uint32_t code = 1; code <= 0xFFFF; code++) {
+        uint8_t bytes[2];
+        int blen = 0;
+
+        if (code < 0x100) {
+            if (code <= 0x20) continue;
+            bytes[0] = (uint8_t)code;
+            blen = 1;
+        }
+        else {
+            uint8_t lead = (uint8_t)(code >> 8);
+            uint8_t trail = (uint8_t)(code & 0xFF);
+            if (!is_valid_sjis_2byte(lead, trail)) continue;
+            bytes[0] = lead;
+            bytes[1] = trail;
+            blen = 2;
+        }
+
+        char bytes_hex[32] = { 0 };
+        bytes_to_hex(bytes, (size_t)blen, bytes_hex, sizeof(bytes_hex));
+
+        // Windows decode/encode (CP932)
+        int win_ok = 0, win_sur = 0;
+        uint32_t win_cp = 0;
+        uint8_t win_rt[8] = { 0 };
+        int win_rt_len = 0;
+        int win_rt_ok = 0;
+
+        win_ok = win_decode_cp932(bytes, blen, &win_cp, &win_sur);
+        if (win_ok) win_rt_ok = win_encode_cp932(win_cp, win_rt, (int)sizeof(win_rt), &win_rt_len);
+        int win_back = (win_rt_ok && win_rt_len == blen && memcmp(win_rt, bytes, blen) == 0);
+
+        char win_rt_hex[32] = { 0 };
+        if (win_rt_ok) bytes_to_hex(win_rt, (size_t)win_rt_len, win_rt_hex, sizeof(win_rt_hex));
+
+        // Library (nkf) decode/encode
+        int lib_ok = 0;
+        uint32_t lib_cp = 0;
+        uint8_t lib_rt[8] = { 0 };
+        int lib_rt_len = 0;
+        int lib_rt_ok = 0;
+
+        if (lib_available) {
+            lib_ok = nkf_decode_cp932_to_codepoint(bytes, blen, &lib_cp);
+            if (lib_ok) lib_rt_ok = nkf_encode_codepoint_to_cp932(lib_cp, lib_rt, (int)sizeof(lib_rt), &lib_rt_len);
+        }
+
+        int lib_back = (lib_rt_ok && lib_rt_len == blen && memcmp(lib_rt, bytes, blen) == 0);
+
+        char lib_rt_hex[32] = { 0 };
+        if (lib_rt_ok) bytes_to_hex(lib_rt, (size_t)lib_rt_len, lib_rt_hex, sizeof(lib_rt_hex));
+
+        // Library Unicode -> Windows CP932 encode
+        int lib_win_ok = 0;
+        uint8_t lib_win_rt[8] = { 0 };
+        int lib_win_rt_len = 0;
+
+        if (lib_ok) lib_win_ok = win_encode_cp932(lib_cp, lib_win_rt, (int)sizeof(lib_win_rt), &lib_win_rt_len);
+        int lib_win_back = (lib_win_ok && lib_win_rt_len == blen && memcmp(lib_win_rt, bytes, blen) == 0);
+
+        char lib_win_rt_hex[32] = { 0 };
+        if (lib_win_ok) bytes_to_hex(lib_win_rt, (size_t)lib_win_rt_len, lib_win_rt_hex, sizeof(lib_win_rt_hex));
+
+        // Unicode character columns (UTF-8)
+        char win_char[32] = { 0 };
+        char lib_char[32] = { 0 };
+
+        if (win_ok) {
+            if (!codepoint_to_utf8(win_cp, win_char, sizeof(win_char))) win_char[0] = '\0';
+            escape_tsv_inplace(win_char);
+        }
+        if (lib_ok) {
+            if (!codepoint_to_utf8(lib_cp, lib_char, sizeof(lib_char))) lib_char[0] = '\0';
+            escape_tsv_inplace(lib_char);
+        }
+
+        int diff = 0;
+        if (win_ok != lib_ok) diff |= 1;
+        if (win_ok && lib_ok && win_cp != lib_cp) diff |= 2;
+        if (win_back != lib_back) diff |= 4;
+
+        char diff_text[64];
+        diff_to_text(diff, diff_text, sizeof(diff_text));
+
+        fprintf(fp,
+            "0x%04X\t%s\t"
+            "%d\t0x%08X\t%s\t%d\t%s\t"
+            "%d\t0x%08X\t%s\t%d\t%s\t"
+            "%d\t%d\t%s\t"
+            "%d\t%s\n",
+            (unsigned)code, bytes_hex,
+
+            win_ok, (unsigned)win_cp, win_ok ? win_char : "", win_back, win_rt_ok ? win_rt_hex : "",
+
+            lib_ok, (unsigned)lib_cp, lib_ok ? lib_char : "", lib_back, lib_rt_ok ? lib_rt_hex : "",
+
+            lib_win_ok, lib_win_back, lib_win_ok ? lib_win_rt_hex : "",
+
+            diff, diff_text
+        );
+    }
+
+    fclose(fp);
+
+    if (!lib_available) {
+        printf("[WARN] nkf32.dll not available or nkf convert failed in probe (file generated but library側は常に失敗になります)\n");
     }
     printf("Saved: %s\n", out_path);
 }
 
 int main(void) {
-    run_case("SHIFT_JIS", "diff_win_cp932_vs_iconv_shift_jis.tsv");
-    run_case("CP932", "diff_win_cp932_vs_iconv_cp932.tsv");
-    run_case("SHIFT_JISX0213", "diff_win_cp932_vs_iconv_shift_jisx0213.tsv");
+    run_case_iconv("SHIFT_JIS", "diff_win_cp932_vs_iconv_shift_jis.tsv");
+    run_case_iconv("CP932", "diff_win_cp932_vs_iconv_cp932.tsv");
+    run_case_iconv("SHIFT_JISX0213", "diff_win_cp932_vs_iconv_shift_jisx0213.tsv");
+
+    run_case_nkf_cp932("diff_win_cp932_vs_nkf_cp932.tsv");
     return 0;
 }

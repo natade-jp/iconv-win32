@@ -1,5 +1,5 @@
-﻿# Windows: CP932, iconv: SHIFT_JIS
-入力コード	入力バイト列(16進)	Windows_CP932:デコード成功	Windows_CP932:Unicodeコードポイント	Windows_CP932:文字	Windows_CP932:元に戻る	Windows_CP932:再エンコード結果(16進)	iconv:デコード成功	iconv:Unicodeコードポイント	iconv:文字	iconv:元に戻る	iconv:再エンコード結果(16進)	iconv→Windows_CP932:エンコード可能	iconv→Windows_CP932:元に戻る	iconv→Windows_CP932:再エンコード結果(16進)	差分フラグ(ビット値)	差分内容
+﻿# Windows: CP932, Library: iconv (SHIFT_JIS)
+入力コード	入力バイト列(16進)	Windows_CP932:デコード成功	Windows_CP932:Unicodeコードポイント	Windows_CP932:文字	Windows_CP932:元に戻る	Windows_CP932:再エンコード結果(16進)	ライブラリ利用:デコード成功	ライブラリ利用:Unicodeコードポイント	ライブラリ利用:文字	ライブラリ利用:元に戻る	ライブラリ利用:再エンコード結果(16進)	ライブラリ利用→Windows_CP932:エンコード可能	ライブラリ利用→Windows_CP932:元に戻る	ライブラリ利用→Windows_CP932:再エンコード結果(16進)	差分フラグ(ビット値)	差分内容
 0x0021	21	1	0x00000021	!	1	21	1	0x00000021	!	1	21	1	1	21	0	差分なし
 0x0022	22	1	0x00000022	"	1	22	1	0x00000022	"	1	22	1	1	22	0	差分なし
 0x0023	23	1	0x00000023	#	1	23	1	0x00000023	#	1	23	1	1	23	0	差分なし
