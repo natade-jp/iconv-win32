@@ -1,175 +1,102 @@
-# iconv-win
+# windows-encoding-binaries
 
-Prebuilt **libiconv for Windows (x86 / x64)**.
+Windows 向けの文字コード変換ライブラリ／ツールの
+ビルド済みバイナリ配布リポジトリです。
 
-This repository provides ready-to-use DLLs, import libraries, and headers for Visual Studio C/C++ projects — no manual build required.
+本リポジトリでは以下を提供します：
 
----
+- **libiconv（DLL + import library + header）**
+- **nkf（DLL + import library + header）**
 
-## 📦 Contents
+Visual Studio C/C++ プロジェクトで
+すぐに利用できる事前ビルド済みバイナリを提供します。
+
+## 📦 内容
 
 ```
-
 dist/
-├─ x86/
-│  ├─ bin/
-│  │  └─ iconv-2.dll
-│  └─ lib/
-│     └─ iconv.lib
-├─ x64/
-│  ├─ bin/
-│  │  └─ iconv-2.dll
-│  └─ lib/
-│     └─ iconv.lib
-├─ include/
-│  └─ iconv.h
-└─ LICENSES/
-└─ libiconv-LICENSE.txt
-
+├─ iconv/
+│  ├─ x86/
+│  │  ├─ bin/iconv-2.dll
+│  │  └─ lib/iconv.lib
+│  ├─ x64/
+│  │  ├─ bin/iconv-2.dll
+│  │  └─ lib/iconv.lib
+│  ├─ include/iconv.h
+│  └─ LICENSES/libiconv-LICENSE.txt
+│
+└─ nkf/
+   ├─ x86/
+   │  ├─ bin/nkf32.dll
+   │  └─ lib/nkf32.lib
+   ├─ x64/
+   │  ├─ bin/nkf32.dll
+   │  └─ lib/nkf32.lib
+   ├─ include/
+   │  ├─ nkf32.h
+   │  └─ nkf.h
+   └─ LICENSES/
+      └─ zlib-LICENSE.txt
 ```
 
----
+## 🎯 目的
 
-## 🚀 How to Use (Visual Studio)
+Windows 環境で
 
-Choose the architecture that matches your project.
+- 文字コード変換処理を組み込みたい
+- Visual Studio で簡単に利用したい
+- 自分でビルドする手間を省きたい
 
-### 1. Include path
+といった用途向けのバイナリ配布です。
 
-```
+※ ソースコードは含みません。
 
-dist/include
+## 🚀 使用方法（概要）
 
-```
+### libiconv
 
-Project  
-→ Properties  
-→ C/C++  
-→ Additional Include Directories
+1. `dist/iconv/include` をインクルードパスに追加
+2. 対応アーキテクチャ（x86 / x64）の `lib` をライブラリパスに追加
+3. `iconv.lib` をリンク設定に追加
+4. 実行時に `iconv-2.dll` を配置
 
----
+### nkf
 
-### 2. Library path
+1. `dist/nkf/include` をインクルードパスに追加
+2. 必要に応じて `nkf32.lib` をリンク
+3. 実行時に `nkf32.dll` を配置
 
-#### Win32 (x86)
+## 🏗 ビルド方法
 
-```
-
-dist/x86/lib
-
-```
-
-#### x64
+以下のスクリプトを用意しています。
 
 ```
+build_iconv.bat
+make_dist_iconv.bat
 
-dist/x64/lib
-
+build_nkf.bat
+make_dist_nkf.bat
 ```
 
-Linker  
-→ General  
-→ Additional Library Directories
+これにより：
 
----
+1. ソース取得
+2. x86 / x64 ビルド
+3. dist レイアウト生成
 
-### 3. Link library
+を行います。
 
-```
+※ vcpkg 本体はリポジトリに含みません。
 
-iconv.lib
+## 📋 ビルド要件
 
-```
+- Visual Studio 2022
+- Desktop development with C++
+- Git
 
-Linker  
-→ Input  
-→ Additional Dependencies
+## 📌 注意事項
 
----
-
-### 4. Runtime
-
-Place the appropriate DLL next to your executable:
-
-#### Win32 (x86)
-
-```
-
-dist/x86/bin/iconv-2.dll
-
-```
-
-#### x64
-
-```
-
-dist/x64/bin/iconv-2.dll
-
-````
-
-(or add the directory to your `PATH`)
-
----
-
-## 💻 Example
-
-```c
-#include <iconv.h>
-````
-
----
-
-## 🏗 Build It Yourself
-
-```
-build_libiconv.bat
-make_package.bat
-```
-
-This will:
-
-1. Download vcpkg
-2. Build libiconv (x86 / x64 DLL)
-3. Create the distribution layout
-
-Note: **vcpkg itself is not included in this repository.**
-
----
-
-## 📋 Requirements (for building)
-
-* Visual Studio 2022
-* Desktop development with C++
-* Git
-
----
-
-## ⚖ License
-
-libiconv is licensed under the **GNU Lesser General Public License (LGPL)**.
-
-The license text is included in:
-
-```
-
-dist/LICENSES/libiconv-LICENSE.txt
-
-```
-
-Source:
-[https://ftp.gnu.org/pub/gnu/libiconv/](https://ftp.gnu.org/pub/gnu/libiconv/)
-
----
-
-## 📌 Notes
-
-* Both **Win32 (x86)** and **x64** binaries are provided
-* This repository contains **prebuilt binaries only**, not the libiconv source code
-* The binaries are built using **vcpkg**
-
----
-
-## 🙏 Acknowledgements
-
-* GNU libiconv
-* vcpkg
+- 本リポジトリはビルド済みバイナリのみを含みます
+- Windows 専用です
+- x86 / x64 両対応です
+- 各ライセンス条件に従ってご利用ください

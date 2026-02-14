@@ -1,46 +1,67 @@
-# Licenses
+# ライセンスについて
 
-This repository distributes **prebuilt libiconv binaries for Windows (x86 / x64)**.
+本リポジトリは、Windows 向けにビルド済みの  
+libiconv および nkf のバイナリを配布しています。
+
+本リポジトリ自体は独自のソフトウェアを提供するものではなく、
+各ソフトウェアのビルド済みバイナリのみを含みます。
 
 ---
 
 ## libiconv
 
-libiconv is licensed under the **GNU Lesser General Public License (LGPL)**.
+- ライセンス: GNU Lesser General Public License (LGPL)
+- 著作権: Free Software Foundation, Inc.
 
-Copyright (C) Free Software Foundation, Inc.
-
-The full license text is included in:
-
-```
-
-dist/LICENSES/libiconv-LICENSE.txt
+ライセンス全文は以下に含まれています。
 
 ```
+dist/iconv/LICENSES/libiconv-LICENSE.txt
+```
 
-Source code:  
+公式サイト:
 https://ftp.gnu.org/pub/gnu/libiconv/
 
----
+### LGPL について
 
-## About This Repository
+libiconv は LGPL に基づいて配布されています。
 
-This repository:
+本リポジトリでは以下を満たしています。
 
-- provides **prebuilt binaries only**
-- does **not** include the libiconv source code
-- builds the binaries using **vcpkg**
+- LGPL ライセンス全文を同梱
+- libiconv が LGPL であることを明示
+- ユーザーが再ビルド可能であることを明確化
 
-If you need to rebuild libiconv yourself, use the provided build scripts.
+libiconv をリンクして再配布する場合は、
+利用者自身の責任において LGPL の条件を満たす必要があります。
 
----
+## nkf
 
-## License Compliance
+- ライセンス: zlib License
 
-This distribution follows the requirements of the LGPL by:
+ライセンス全文は以下に含まれています。
 
-- providing the original license text
-- clearly stating that libiconv is LGPL-licensed
-- allowing users to rebuild the library from source
+```
+dist/nkf/LICENSES/nkf-LICENSE.txt
+```
 
-Users of this package must ensure their own compliance with the LGPL when redistributing applications that link to libiconv.
+zlib ライセンスは、比較的緩やかな条件のオープンソースライセンスです。
+
+## 本リポジトリについて
+
+本リポジトリは：
+
+- ビルド済みバイナリのみを提供します
+- libiconv および nkf のソースコードは含みません
+- Windows (x86 / x64) 向けにビルドされています
+- libiconv は vcpkg を使用してビルドしています
+
+再ビルドが必要な場合は、提供しているビルドスクリプトをご利用ください。
+
+## 利用者の責任について
+
+本リポジトリを利用してアプリケーションを配布する場合、
+各ライセンス条件を理解し、遵守する責任は利用者にあります。
+
+特に libiconv（LGPL）を動的リンクまたは再配布する場合は、
+LGPL の条件を確認してください。
