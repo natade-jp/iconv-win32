@@ -244,57 +244,62 @@ static int iconv_encode_any(const char* enc, uint32_t cp, uint8_t* out, size_t o
     return 1;
 }
 
-/* ---------------- nkf (library, CP932 only) ---------------- */
+/* ---------------- nkf (library, --ic/--oc) ---------------- */
 
-/* nkf: CP932 bytes -> UTF-8 bytes */
-static int nkf_cp932_to_utf8(const uint8_t* in, int in_len, uint8_t* out, DWORD out_cap, DWORD* out_len) {
-    if (SetNkfOption("-s -w") < 0) return 0; /* 入力CP932(-s) -> 出力UTF-8(-w) */
+/*
+  nkf convert wrapper:
+    --ic=<in_codeset> --oc=<out_codeset>
+  ※nkf32.dll が長いオプションを受け付ける前提
+*/
+static int nkf_convert_ic_oc(
+    const char* ic, const char* oc,
+    const uint8_t* in, int in_len,
+    uint8_t* out, DWORD out_cap,
+    DWORD* out_len
+) {
+    char opt[128];
+    snprintf(opt, sizeof(opt), "--ic=%s --oc=%s", ic, oc);
+
+    if (SetNkfOption(opt) < 0) return 0;
+
     DWORD produced = 0;
     BOOL ok = NkfConvertSafe((LPSTR)out, out_cap, &produced, (LPCSTR)in, (DWORD)in_len);
     if (!ok) return 0;
     if (produced >= out_cap) return 0;
+
     *out_len = produced;
     return 1;
 }
 
-/* nkf: UTF-8 bytes -> CP932 bytes */
-static int nkf_utf8_to_cp932(const uint8_t* in, int in_len, uint8_t* out, DWORD out_cap, DWORD* out_len) {
-    if (SetNkfOption("-w -s") < 0) return 0; /* 入力UTF-8(-w) -> 出力CP932相当(-s) */
-    DWORD produced = 0;
-    BOOL ok = NkfConvertSafe((LPSTR)out, out_cap, &produced, (LPCSTR)in, (DWORD)in_len);
-    if (!ok) return 0;
-    if (produced >= out_cap) return 0;
-    *out_len = produced;
-    return 1;
-}
-
-/* nkf: CP932 bytes -> codepoint (via UTF-8 -> Windows) */
-static int nkf_decode_cp932_to_codepoint(const uint8_t* bytes, int len, uint32_t* cp_out) {
+/* nkf: bytes(<enc>) -> codepoint (via UTF-8 -> Windows) */
+static int nkf_decode_to_codepoint(const char* nkf_enc, const uint8_t* bytes, int len, uint32_t* cp_out) {
     uint8_t u8buf[64] = { 0 };
     DWORD u8len = 0;
-    if (!nkf_cp932_to_utf8(bytes, len, u8buf, (DWORD)sizeof(u8buf), &u8len)) return 0;
+
+    if (!nkf_convert_ic_oc(nkf_enc, "UTF-8", bytes, len, u8buf, (DWORD)sizeof(u8buf), &u8len)) return 0;
     if (u8len == 0) return 0;
+
     return win_decode_utf8(u8buf, (int)u8len, cp_out);
 }
 
-/* nkf: codepoint -> CP932 bytes (via UTF-8 string -> nkf) */
-static int nkf_encode_codepoint_to_cp932(uint32_t cp, uint8_t* out, int out_cap, int* out_len) {
+/* nkf: codepoint -> bytes(<enc>) (via UTF-8 string -> nkf) */
+static int nkf_encode_from_codepoint(const char* nkf_enc, uint32_t cp, uint8_t* out, int out_cap, int* out_len) {
     char u8str[32] = { 0 };
     if (!codepoint_to_utf8(cp, u8str, sizeof(u8str))) return 0;
 
-    uint8_t cpbuf[16] = { 0 };
-    DWORD cplen = 0;
+    uint8_t buf[32] = { 0 };
+    DWORD blen = 0;
     int in_len = (int)strlen(u8str);
 
-    if (!nkf_utf8_to_cp932((const uint8_t*)u8str, in_len, cpbuf, (DWORD)sizeof(cpbuf), &cplen)) return 0;
-    if ((int)cplen > out_cap) return 0;
+    if (!nkf_convert_ic_oc("UTF-8", nkf_enc, (const uint8_t*)u8str, in_len, buf, (DWORD)sizeof(buf), &blen)) return 0;
 
-    memcpy(out, cpbuf, (size_t)cplen);
-    *out_len = (int)cplen;
+    if ((int)blen > out_cap) return 0;
+    memcpy(out, buf, (size_t)blen);
+    *out_len = (int)blen;
     return 1;
 }
 
-/* ---------------- common output header ---------------- */
+/* ---------------- common TSV header ---------------- */
 
 static void write_tsv_header(FILE* fp) {
     fprintf(fp,
@@ -433,21 +438,21 @@ static void run_case_iconv(const char* iconv_enc, const char* out_path) {
     printf("Saved: %s\n", out_path);
 }
 
-static void run_case_nkf_cp932(const char* out_path) {
+static void run_case_nkf(const char* nkf_enc, const char* out_path) {
     FILE* fp = fopen(out_path, "wb");
     if (!fp) { perror("fopen"); return; }
 
     write_bom_utf8(fp);
-    fprintf(fp, "# Windows: CP932, Library: nkf (CP932 only)\n");
+    fprintf(fp, "# Windows: CP932, Library: nkf (--ic/--oc) (%s)\n", nkf_enc);
     write_tsv_header(fp);
 
     int lib_available = 1;
     {
-        // 軽いプローブ（A を CP932->UTF8 変換できるか）
+        // 軽いプローブ：'A' を <nkf_enc> -> UTF-8 に変換できるか
+        const uint8_t in[1] = { 0x41 };
         uint8_t out[8] = { 0 };
         DWORD outLen = 0;
-        const uint8_t in[1] = { 0x41 }; // 'A'
-        if (!nkf_cp932_to_utf8(in, 1, out, (DWORD)sizeof(out), &outLen)) lib_available = 0;
+        if (!nkf_convert_ic_oc(nkf_enc, "UTF-8", in, 1, out, (DWORD)sizeof(out), &outLen)) lib_available = 0;
     }
 
     for (uint32_t code = 1; code <= 0xFFFF; code++) {
@@ -493,8 +498,8 @@ static void run_case_nkf_cp932(const char* out_path) {
         int lib_rt_ok = 0;
 
         if (lib_available) {
-            lib_ok = nkf_decode_cp932_to_codepoint(bytes, blen, &lib_cp);
-            if (lib_ok) lib_rt_ok = nkf_encode_codepoint_to_cp932(lib_cp, lib_rt, (int)sizeof(lib_rt), &lib_rt_len);
+            lib_ok = nkf_decode_to_codepoint(nkf_enc, bytes, blen, &lib_cp);
+            if (lib_ok) lib_rt_ok = nkf_encode_from_codepoint(nkf_enc, lib_cp, lib_rt, (int)sizeof(lib_rt), &lib_rt_len);
         }
 
         int lib_back = (lib_rt_ok && lib_rt_len == blen && memcmp(lib_rt, bytes, blen) == 0);
@@ -555,16 +560,23 @@ static void run_case_nkf_cp932(const char* out_path) {
     fclose(fp);
 
     if (!lib_available) {
-        printf("[WARN] nkf32.dll not available or nkf convert failed in probe (file generated but library側は常に失敗になります)\n");
+        printf("[WARN] nkf probe failed for enc=%s (file generated but library側は常に失敗になります)\n", nkf_enc);
     }
     printf("Saved: %s\n", out_path);
 }
 
+/* ---------------- main ---------------- */
+
 int main(void) {
+    // iconv 系
     run_case_iconv("SHIFT_JIS", "diff_win_cp932_vs_iconv_shift_jis.tsv");
     run_case_iconv("CP932", "diff_win_cp932_vs_iconv_cp932.tsv");
     run_case_iconv("SHIFT_JISX0213", "diff_win_cp932_vs_iconv_shift_jisx0213.tsv");
 
-    run_case_nkf_cp932("diff_win_cp932_vs_nkf_cp932.tsv");
+    // nkf 系
+    run_case_nkf("Shift_JIS", "diff_win_cp932_vs_nkf_shift_jis.tsv");
+    run_case_nkf("CP932", "diff_win_cp932_vs_nkf_cp932.tsv");
+    run_case_nkf("Shift_JIS-2004", "diff_win_cp932_vs_nkf_shift_jis_2004.tsv");
+
     return 0;
 }
